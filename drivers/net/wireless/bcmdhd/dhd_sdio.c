@@ -4282,6 +4282,14 @@ deliver:
 			continue;
 		}
 
+		/* Handle monitor mode */
+		if (chan == 15) {
+			dhd_os_sdunlock(bus->dhd);
+			dhd_rx_frame(bus->dhd, ifidx, pkt, 1, chan);
+			dhd_os_sdlock(bus->dhd);
+			continue;
+		}
+
 		/* Fill in packet len and prio, deliver upward */
 		PKTSETLEN(osh, pkt, len);
 		PKTPULL(osh, pkt, doff);

@@ -77,6 +77,9 @@ static int dhd_mon_if_stop(struct net_device *ndev);
 static int dhd_mon_if_subif_start_xmit(struct sk_buff *skb, struct net_device *ndev);
 static void dhd_mon_if_set_multicast_list(struct net_device *ndev);
 static int dhd_mon_if_change_mac(struct net_device *ndev, void *addr);
+struct sk_buff *dhd_monitor_decode_skb(struct sk_buff *skb);
+
+extern u16 current_freq;
 
 static const struct net_device_ops dhd_mon_if_ops = {
 	.ndo_open		= dhd_mon_if_open,
@@ -161,6 +164,7 @@ static int dhd_mon_if_stop(struct net_device *ndev)
 static int dhd_mon_if_subif_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	int ret = 0;
+#if 0
 	int rtap_len;
 	int qos_len = 0;
 	int dot11_hdr_len = 24;
@@ -171,6 +175,7 @@ static int dhd_mon_if_subif_start_xmit(struct sk_buff *skb, struct net_device *n
 	unsigned char dst_mac_addr[6];
 	struct ieee80211_hdr *dot11_hdr;
 	struct ieee80211_radiotap_header *rtap_hdr;
+#endif
 	monitor_interface* mon_if;
 
 	MON_PRINT("enter\n");
@@ -181,6 +186,8 @@ static int dhd_mon_if_subif_start_xmit(struct sk_buff *skb, struct net_device *n
 		goto fail;
 	}
 
+/* we don't handle radiotap on packet injection. */
+#if 0
 	if (unlikely(skb->len < sizeof(struct ieee80211_radiotap_header)))
 		goto fail;
 
@@ -227,6 +234,13 @@ static int dhd_mon_if_subif_start_xmit(struct sk_buff *skb, struct net_device *n
 
 		return ret;
 	}
+#else
+	/* Use the real net device to transmit the packet */
+	ret = dhd_start_xmit(skb, mon_if->real_ndev);
+
+	return ret;
+#endif
+
 fail:
 	dev_kfree_skb(skb);
 	return 0;
@@ -407,3 +421,64 @@ int dhd_monitor_uninit(void)
 	mutex_unlock(&g_monitor.lock);
 	return 0;
 }
+
+struct net_device *dhd_monitor_get_mondev(struct net_device *real_ndev)
+{
+	struct net_device *mon_ndev = NULL;
+
+	if (g_monitor.monitor_state == MONITOR_STATE_INTERFACE_ADDED) {
+		int i;
+
+		for (i = 0; i < DHD_MAX_IFS; i++) {
+			if (g_monitor.mon_if[i].real_ndev == real_ndev) {
+				mon_ndev = g_monitor.mon_if[i].mon_ndev;
+				break;
+			}
+		}
+	}
+
+	return mon_ndev;
+}
+
+struct sk_buff *dhd_monitor_decode_skb(struct sk_buff *skb)
+{
+	char radio_tap_header[15];
+	char *data;
+	unsigned int data_offset;
+	unsigned int pkt_len;
+	int rssi;
+	char my_byte;
+
+	data = skb->data;
+	pkt_len = *(unsigned short*)data;
+	skb_trim(skb, pkt_len);
+	data_offset = 12 + 0x1e + 6;
+	if(pkt_len < 24) {
+		return NULL;
+	}
+
+	my_byte = data[12 + 12];
+	if ((my_byte == 5) || (my_byte == 1)) {
+		return NULL;
+	}
+
+	if (my_byte & 4) {
+		data_offset += 2;
+	}
+
+	rssi = data[0x12];
+
+	((unsigned int*)radio_tap_header)[0] = 0x000f0000; /* it_version, it_pad, it_len */
+	((unsigned int*)radio_tap_header)[1] = 0x2a;
+	radio_tap_header[8] = 0x10;                        /* flags: FRAME_INC_FCS */
+	((unsigned short*)(radio_tap_header + 10))[0] = current_freq; /* frequency */
+	((unsigned short*)(radio_tap_header + 10))[1] = 0x0080;       /* G2_SPEC */
+	radio_tap_header[14] = rssi;
+
+	skb_pull(skb, data_offset);
+	skb_push(skb, sizeof(radio_tap_header));
+	memcpy(skb->data, radio_tap_header, sizeof(radio_tap_header));
+
+	return skb;
+}
+

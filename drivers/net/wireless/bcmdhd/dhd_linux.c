@@ -455,7 +455,8 @@ static void dhd_dump_htsfhisto(histo_t *his, char *s);
 /* Monitor interface */
 int dhd_monitor_init(void *dhd_pub);
 int dhd_monitor_uninit(void);
-
+struct net_device *dhd_monitor_get_mondev(struct net_device *real_ndev);
+struct sk_buff *dhd_monitor_decode_skb(struct sk_buff *skb);
 
 #if defined(WL_WIRELESS_EXT)
 struct iw_statistics *dhd_get_wireless_stats(struct net_device *dev);
@@ -1495,21 +1496,50 @@ dhd_rx_frame(dhd_pub_t *dhdp, int ifidx, void *pktbuf, int numpkt, uint8 chan)
 			ifp = dhd->iflist[0];
 
 		ASSERT(ifp);
-		skb->dev = ifp->net;
+
+		/* Handle monitor mode */
+		if (chan == 15) {
+			struct sk_buff *dec_skb;
+			struct net_device *mon_ndev;
+
+			dec_skb = dhd_monitor_decode_skb(skb);
+			if (dec_skb == NULL) {
+				PKTFREE(dhdp->osh, skb, FALSE);
+				continue;
+			}
+
+			skb = dec_skb;
+
+			mon_ndev = dhd_monitor_get_mondev(ifp->net);
+			if (mon_ndev != NULL) {
+				skb->dev = mon_ndev;
+			}
+			else {
+				skb->dev = ifp->net;
+			}
+		}
+		else {
+			skb->dev = ifp->net;
+		}
+
 		skb->protocol = eth_type_trans(skb, skb->dev);
 
 		if (skb->pkt_type == PACKET_MULTICAST) {
 			dhd->pub.rx_multicast++;
 		}
 
-		skb->data = eth;
-		skb->len = len;
+		if (chan != 15) {
+			skb->data = eth;
+			skb->len = len;
+		}
 
 #ifdef WLMEDIA_HTSF
 	dhd_htsf_addrxts(dhdp, pktbuf);
 #endif
-		/* Strip header, count, deliver upward */
-		skb_pull(skb, ETH_HLEN);
+		if (chan != 15) {
+			/* Strip header, count, deliver upward */
+			skb_pull(skb, ETH_HLEN);
+		}
 
 		/* Process special event packets and then discard them */
 		if (ntoh16(skb->protocol) == ETHER_TYPE_BRCM) {

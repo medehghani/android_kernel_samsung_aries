@@ -478,6 +478,9 @@ static struct ieee80211_rate __wl_rates[] = {
 #define wl_g_rates		(__wl_rates + 0)
 #define wl_g_rates_size	12
 
+/* workaround: for monitor mode */
+u16 current_freq = 2412;
+
 static struct ieee80211_channel __wl_2ghz_channels[] = {
 	CHAN2G(1, 2412, 0),
 	CHAN2G(2, 2417, 0),
@@ -3915,6 +3918,10 @@ wl_cfg80211_set_channel(struct wiphy *wiphy, struct net_device *dev,
 	if (err < 0) {
 		WL_ERR(("WLC_SET_CHANNEL error %d chip may not be supporting this channel\n", err));
 	}
+	else {
+		current_freq = chan->center_freq;
+	}
+
 	return err;
 }
 
